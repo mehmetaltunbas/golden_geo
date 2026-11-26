@@ -117,9 +117,31 @@
             const m = l + Math.atan2(Math.sin(angle)*Math.sin(d)*Math.cos(p), Math.cos(d)-Math.sin(p)*Math.sin(q));
             return new google.maps.LatLng(q/rad, ((m/rad+540)%360)-180);
         }
+        // En iyi tahmine göre dinamik ipucu yarıçapı (km).
+        function calculateHintRadius() {
+            const bestKm = Math.min(...attempts.map(a => a.km));
+            const limit = RADII[attempts.length - 1];
+            const previousRadius = hintCircle ? hintCircle.getRadius() / 1000 : Infinity;
+            return Math.min(limit, bestKm * 0.5, previousRadius * 0.5);
+        }
+
         function showHint(radius) {
             const previous = hintCircle;
+            // Garantili iç içe daire için önceki merkezden hedefe doğru
+            // orantılı bir merkez oluştur; rastgele aday bulunursa onu kullan.
             let center = target;
+            if (previous) {
+                const old = previous.getCenter();
+                const d = distance(target, old);
+                const rad = Math.PI / 180;
+                const p = target.lat() * rad, q = old.lat() * rad;
+                const dl = (old.lng() - target.lng()) * rad;
+                const bearing = Math.atan2(Math.sin(dl) * Math.cos(q),
+                    Math.cos(p) * Math.sin(q) - Math.sin(p) * Math.cos(q) * Math.cos(dl));
+                center = offset(target, d * radius / (previous.getRadius() / 1000), bearing);
+            } else {
+                center = offset(target, radius * 0.5, Math.random() * 2 * Math.PI);
+            }
             // Yeni daire hedefi içerir ve önceki dairenin içinde kalır.
             for (let i = 0; i < 200; i++) {
                 const candidate = offset(target, radius * Math.sqrt(Math.random()) * .9, Math.random()*2*Math.PI);
@@ -254,7 +276,7 @@
                     marker = null;
                 }
                 chosen = null;
-                showHint(RADII[attempts.length-1]);
+                showHint(calculateHintRadius());
                 $('guess').disabled = true;
                 status(`${km.toFixed(2)} km • ${6-attempts.length} hak kaldı • Hedef sarı dairenin içinde. Olası puan: ${POINTS[attempts.length]}`);
                 return;
@@ -281,6 +303,9 @@
         };
         $('settings').onclick = () => $('setup').showModal();
         $('start').onclick = async () => {
+
+            $('key').value = 'AIzaSyCRATOx676bLnij94g_e1IyNzHDwO0r1CQ'
+            
             const key = $('key').value.trim();
             if (!key && !map) { $('error').textContent = 'API anahtarını gir.'; return; }
             $('start').disabled = true;
