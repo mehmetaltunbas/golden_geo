@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GoldenGeoHunter</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #101820; color: white; font: 15px system-ui; }
+        header { height: 64px; display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #17232e; }
+        header strong { color: #e9bd65; font-size: 22px; margin-right: auto; }
+        button, input, select { font: inherit; padding: 10px; border-radius: 8px; border: 1px solid #64748b; }
+        button { background: #e9bd65; color: #17232e; font-weight: bold; cursor: pointer; }
+        button:disabled { opacity: .5; cursor: default; }
+        #street {
+            position: absolute;
+            inset: 64px 0 0;
+            z-index: 0;
+        }
+        #panel {
+            position: absolute;
+            right: 16px;
+            bottom: 32px;
+            width: min(440px, 94vw);
+            background: #17232e;
+            padding: 12px;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px #0008;
+            z-index: 1000;
+        }
+        #map {
+            height: 250px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        #guess { width: 100%; margin-top: 8px; }
+        #expand { margin-bottom: 8px; }
+        #attempts { display: flex; gap: 6px; margin: 8px 0; }
+        #attempts span { flex: 1; text-align: center; padding: 5px; border: 1px solid #64748b; border-radius: 6px; }
+        #attempts .miss { background: #793d35; }
+        #attempts .hit { background: #166534; }
+        #history { font-size: 12px; color: #cbd5e1; max-height: 72px; overflow: auto; }
+        #status { padding: 8px 0; min-height: 36px; }
+        #panel.large { width: min(850px, 94vw); }
+        #panel.large #map { height: 55vh; }
+        dialog { background: #17232e; color: white; border: 1px solid #64748b; border-radius: 16px; width: min(480px, 94vw); padding: 24px; }
+        dialog::backdrop { background: #000b; }
+        dialog input, dialog select { width: 100%; margin: 8px 0 16px; }
+        #error { color: #ffb4a9; overflow-wrap: anywhere; }
+        @media (max-width: 600px) {
+            header { gap: 8px; padding: 8px; }
+            header strong { font-size: 15px; }
+            #map { height: 170px; }
+            #panel { right: 3vw; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <strong>GoldenGeoHunter</strong>
+        <span id="round">Tur 0/5</span>
+        <span id="score">0 puan</span>
+        <button id="settings">Yeni oyun</button>
+    </header>
+    <div id="street"></div>
+    <section id="panel">
+        <button id="expand">Haritayı büyüt</button>
+        <div id="map"></div>
+        <div id="attempts" aria-label="Tahmin hakları"></div>
+        <div id="history"></div>
+        <div id="status" aria-live="polite">Oyunu başlat.</div>
+        <button id="guess" disabled>Tahmini onayla</button>
+    </section>
+    <dialog id="setup">
+        <h2>GoldenGeoHunter</h2>
+        <p>Gerçek sokakları keşfet. Beş tur, her turda altı tahmin. Hedefe 1 km veya daha yakın ol. Toplam 25.000 puan.</p>
+        <label>Google Maps API Key
+            <input id="key" type="password" autocomplete="off" placeholder="AIza...">
+        </label>
+        <label>Bölge
+            <select id="region">
+                <option value="world">Dünya</option>
+                <option value="europe">Avrupa</option>
+                <option value="turkey">Türkiye</option>
+            </select>
+        </label>
+        <p id="error"></p>
+        <button id="start">Oyunu başlat</button>
+    </dialog>
+    <script>
+        const $ = id => document.getElementById(id);
+        const turkey = [[41.01,28.98],[39.93,32.85],[38.42,27.14],[36.89,30.70],[40.19,29.06],[37.87,32.48],[37,35.32],[41.29,36.33],[39.75,37.02],[38.67,39.22],[37.92,40.23],[40.99,39.72]];
+        const europe = [[48.85,2.35],[52.52,13.4],[41.9,12.5],[40.42,-3.7],[51.5,-.12],[59.33,18.07],[50.08,14.43],[47.5,19.04],[38.72,-9.14],[60.17,24.94],[52.23,21.01],[45.81,15.98],[46.95,7.45],[53.35,-6.26],[37.98,23.73]];
+        const world = [...turkey,...europe,[35.68,139.69],[37.56,126.97],[1.35,103.82],[-33.87,151.21],[-36.85,174.76],[40.71,-74],[49.28,-123.12],[19.43,-99.13],[-23.55,-46.63],[-34.6,-58.38],[-33.92,18.42],[14.6,120.98],[13.75,100.5],[43.65,-79.38],[34.05,-118.24],[4.71,-74.07],[-12.05,-77.04],[3.14,101.69]];
+        let map, panorama, service, marker, answer, line, target, chosen;
+        let round = 0, total = 0, generation = 0, phase = 'idle', region = 'world';
+        const used = new Set();
+        const POINTS = [5000, 4000, 3000, 2000, 1000, 500];
+        const RADII = [1000, 500, 100, 25, 5]; // km
+        let attempts = [], hintCircle = null, guessMarkers = [];
+        function attemptHud() {
+            $('attempts').replaceChildren();
+            for (let i = 0; i < 6; i++) {
+                const cell = document.createElement('span');
+                cell.textContent = i + 1;
+                if (attempts[i]) cell.className = attempts[i].km <= 1 ? 'hit' : 'miss';
+                $('attempts').appendChild(cell);
+            }
+            $('history').textContent = attempts.map((a,i) => `${i+1}: ${a.km.toFixed(2)} km`).join(' • ');
+        }
+        // Küresel koordinatlarda hedefin çevresinde rastgele merkez üret.
+        function offset(origin, km, angle) {
+            const rad = Math.PI / 180;
+            const p = origin.lat() * rad, l = origin.lng() * rad;
+            const d = km / 6371;
+            const q = Math.asin(Math.sin(p)*Math.cos(d) + Math.cos(p)*Math.sin(d)*Math.cos(angle));
+            const m = l + Math.atan2(Math.sin(angle)*Math.sin(d)*Math.cos(p), Math.cos(d)-Math.sin(p)*Math.sin(q));
+            return new google.maps.LatLng(q/rad, ((m/rad+540)%360)-180);
+        }
+        function showHint(radius) {
+            const previous = hintCircle;
+            let center = target;
+            // Yeni daire hedefi içerir ve önceki dairenin içinde kalır.
+            for (let i = 0; i < 200; i++) {
+                const candidate = offset(target, radius * Math.sqrt(Math.random()) * .9, Math.random()*2*Math.PI);
+                if (!previous || distance(candidate, previous.getCenter()) + radius <= previous.getRadius()/1000) {
+                    center = candidate;
+                    break;
+                }
+            }
+            if (previous) previous.setMap(null);
+            hintCircle = new google.maps.Circle({map, center, radius: radius*1000,
+                strokeColor:'#e9bd65', strokeWeight:2, fillColor:'#e9bd65', fillOpacity:.18, clickable:false});
+            map.fitBounds(hintCircle.getBounds(), 24);
+        }
+        const status = message => $('status').textContent = message;
+        function hud() {
+            $('round').textContent = `Tur ${round}/5`;
+            $('score').textContent = total.toLocaleString('tr-TR') + ' puan';
+        }
+        // Google Maps JavaScript API is loaded only after the user enters a key.
+        function loadGoogle(key) {
+            if (window.google?.maps?.Map) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                window.initGolden = resolve;
+                window.gm_authFailure = () => {
+                    const message = 'Google API yetkilendirme hatası. Anahtarı, billing ve localhost izinlerini kontrol et.';
+                    $('error').textContent = message;
+                    status(message);
+                    reject(new Error(message));
+                };
+                script.onerror = () => { script.remove(); reject(new Error('Google Maps yüklenemedi.')); };
+                script.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&loading=async&callback=initGolden&v=weekly&language=tr';
+                document.head.appendChild(script);
+            });
+        }
+        function initialize() {
+            if (map) return;
+            map = new google.maps.Map($('map'), {
+                center: {lat: 20, lng: 0}, zoom: 2,
+                streetViewControl: false, mapTypeControl: false,
+                fullscreenControl: false, clickableIcons: false
+            });
+            panorama = new google.maps.StreetViewPanorama($('street'), {
+                addressControl: false, showRoadLabels: false,
+                linksControl: true, panControl: true, zoomControl: true,
+                fullscreenControl: false, enableCloseButton: false,
+                visible: false
+            });
+            service = new google.maps.StreetViewService();
+            map.addListener('click', event => {
+                if (phase !== 'guess') return;
+                chosen = event.latLng;
+                if (marker) marker.setPosition(chosen);
+                else marker = new google.maps.Marker({map, position: chosen, label: 'T'});
+                $('guess').disabled = false;
+                status(`Tahmin ${attempts.length+1}/6 • Olası puan: ${POINTS[attempts.length]}`);
+            });
+        }
+        function findPanorama(location) {
+            return new Promise(resolve => {
+                service.getPanorama({location, radius: 3000, preference: google.maps.StreetViewPreference.NEAREST, source: google.maps.StreetViewSource.OUTDOOR}, (data, result) => {
+                    resolve(result === google.maps.StreetViewStatus.OK ? data : null);
+                });
+            });
+        }
+        async function nextRound() {
+            const g = ++generation;
+            phase = 'loading';
+            chosen = target = null;
+            attempts = [];
+            attemptHud();
+            if (hintCircle) hintCircle.setMap(null);
+            hintCircle = null;
+            for (const item of guessMarkers) item.setMap(null);
+            guessMarkers = [];
+            for (const item of [marker, answer, line]) if (item) item.setMap(null);
+            marker = answer = line = null;
+            map.setCenter(region === 'turkey' ? {lat:39,lng:35} : region === 'europe' ? {lat:50,lng:15} : {lat:20,lng:0});
+            map.setZoom(region === 'turkey' ? 5 : region === 'europe' ? 4 : 2);
+            $('guess').disabled = true;
+            $('guess').textContent = 'Tahmini onayla';
+            status('Sokak görüntüsü aranıyor…');
+            const pool = {turkey,europe,world}[region];
+            try {
+                for (let i = 0; i < 15; i++) {
+                    if (g !== generation) return;
+                    const [lat,lng] = pool[Math.floor(Math.random()*pool.length)];
+                    const data = await findPanorama({lat:lat+(Math.random()-.5)*.12,lng:lng+(Math.random()-.5)*.12});
+                    if (g !== generation) return;
+                    if (!data?.location?.latLng || used.has(data.location.pano)) continue;
+                    target = data.location.latLng;
+                    used.add(data.location.pano);
+                    panorama.setPano(data.location.pano);
+                    panorama.setPov({heading:Math.random()*360,pitch:0});
+                    panorama.setZoom(0);
+                    panorama.setVisible(true);
+                    round++;
+                    hud();
+                    phase = 'guess';
+                    status('Sokağı incele. 6 tahmin hakkın var.');
+                    return;
+                }
+                throw new Error('Uygun sokak görüntüsü bulunamadı.');
+            } catch (error) {
+                if (g !== generation) return;
+                phase = 'idle';
+                status(error.message);
+                $('guess').textContent = 'Tekrar dene';
+                $('guess').disabled = false;
+            }
+        }
+        function distance(a,b) {
+            const rad = Math.PI/180;
+            const h = Math.sin((b.lat()-a.lat())*rad/2)**2 + Math.cos(a.lat()*rad)*Math.cos(b.lat()*rad)*Math.sin((b.lng()-a.lng())*rad/2)**2;
+            return 6371*2*Math.asin(Math.sqrt(Math.min(1,h)));
+        }
+        $('guess').onclick = () => {
+            if (phase === 'result' || phase === 'idle') {
+                if (round >= 5) $('setup').showModal();
+                else nextRound();
+                return;
+            }
+            if (phase !== 'guess' || !chosen || !target) return;
+            const km = distance(chosen,target);
+            attempts.push({km, position: chosen});
+            attemptHud();
+            const success = km <= 1;
+            if (!success && attempts.length < 6) {
+                if (marker) {
+                    marker.setLabel(String(attempts.length));
+                    guessMarkers.push(marker);
+                    marker = null;
+                }
+                chosen = null;
+                showHint(RADII[attempts.length-1]);
+                $('guess').disabled = true;
+                status(`${km.toFixed(2)} km • ${6-attempts.length} hak kaldı • Hedef sarı dairenin içinde. Olası puan: ${POINTS[attempts.length]}`);
+                return;
+            }
+            if (hintCircle) hintCircle.setMap(null);
+            hintCircle = null;
+            const points = success ? POINTS[attempts.length-1] : 0;
+            total += points;
+            hud();
+            answer = new google.maps.Marker({map,position:target,label:'G',title:'Gerçek konum'});
+            line = new google.maps.Polyline({map,path:[chosen,target],strokeColor:'#d89b20',strokeWeight:3,geodesic:true});
+            const bounds = new google.maps.LatLngBounds();
+            bounds.extend(chosen); bounds.extend(target);
+            map.fitBounds(bounds,30);
+            google.maps.event.addListenerOnce(map,'idle',()=>{if(map.getZoom()>14) map.setZoom(14);});
+            phase = 'result';
+            status(`${success ? "Başarılı!" : "Hakların bitti."} ${km.toFixed(2)} km • +${points} puan` + (round===5 ? ` • Oyun bitti: ${total}/25000` : ''));
+            $('guess').textContent = round===5 ? 'Yeni oyun' : 'Sonraki tur';
+        };
+        $('expand').onclick = () => {
+            const large = $('panel').classList.toggle('large');
+            $('expand').textContent = large ? 'Haritayı küçült' : 'Haritayı büyüt';
+            if (map) google.maps.event.trigger(map,'resize');
+        };
+        $('settings').onclick = () => $('setup').showModal();
+        $('start').onclick = async () => {
+            const key = $('key').value.trim();
+            if (!key && !map) { $('error').textContent = 'API anahtarını gir.'; return; }
+            $('start').disabled = true;
+            $('error').textContent = '';
+            try {
+                await loadGoogle(key);
+                initialize();
+                region = $('region').value;
+                round = total = 0;
+                used.clear();
+                hud();
+                $('setup').close();
+                nextRound();
+            } catch (error) { $('error').textContent = error.message; }
+            finally { $('start').disabled = false; }
+        };
+        $('setup').showModal();
+    </script>
+</body>
+</html>
