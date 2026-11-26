@@ -33,6 +33,11 @@
             border-radius: 8px;
             overflow: hidden;
         }
+        #mapToolbar { display: flex; gap: 8px; justify-content: space-between; }
+        #openMap { display: none; }
+        #panel.collapsed { width: auto; padding: 0; background: transparent; box-shadow: none; }
+        #panel.collapsed #openMap { display: block; box-shadow: 0 4px 16px #0008; }
+        #panel.collapsed #mapContent { display: none; }
         #guess { width: 100%; margin-top: 8px; }
         #expand { margin-bottom: 8px; }
         #attempts { display: flex; gap: 6px; margin: 8px 0; }
@@ -50,7 +55,9 @@
         @media (max-width: 600px) {
             header { gap: 8px; padding: 8px; }
             header strong { font-size: 15px; }
-            #map { height: 170px; }
+            #map { height: min(42dvh, 340px); }
+            #panel.large #map { height: 55dvh; }
+            #panel { max-height: calc(100dvh - 80px); overflow: auto; }
             #panel { right: 3vw; }
         }
     </style>
@@ -64,12 +71,18 @@
     </header>
     <div id="street"></div>
     <section id="panel">
-        <button id="expand">Haritayı büyüt</button>
+        <button id="openMap" aria-controls="mapContent" aria-expanded="false">🗺 Haritayı aç</button>
+        <div id="mapContent">
+        <div id="mapToolbar">
+            <button id="expand">Haritayı büyüt</button>
+            <button id="collapseMap" aria-controls="mapContent">Köşeye küçült</button>
+        </div>
         <div id="map"></div>
         <div id="attempts" aria-label="Tahmin hakları"></div>
         <div id="history"></div>
         <div id="status" aria-live="polite">Oyunu başlat.</div>
         <button id="guess" disabled>Tahmini onayla</button>
+        </div>
     </section>
     <dialog id="setup">
         <h2>GoldenGeoHunter</h2>
@@ -175,6 +188,23 @@
                 document.head.appendChild(script);
             });
         }
+        const mobileLayout = window.matchMedia('(max-width: 600px), (pointer: coarse) and (max-width: 900px)');
+        function setMapCollapsed(collapsed) {
+            const center = map?.getCenter();
+            const zoom = map?.getZoom();
+            $('panel').classList.toggle('collapsed', collapsed);
+            $('openMap').setAttribute('aria-expanded', String(!collapsed));
+            if (!collapsed && map) {
+                requestAnimationFrame(() => {
+                    google.maps.event.trigger(map, 'resize');
+                    if (center) map.setCenter(center);
+                    if (zoom != null) map.setZoom(zoom);
+                });
+            }
+        }
+        $('openMap').onclick = () => setMapCollapsed(false);
+        $('collapseMap').onclick = () => setMapCollapsed(true);
+        mobileLayout.addEventListener('change', e => setMapCollapsed(e.matches));
         function initialize() {
             if (map) return;
             map = new google.maps.Map($('map'), {
@@ -207,6 +237,7 @@
         }
         async function nextRound() {
             const g = ++generation;
+            setMapCollapsed(false);
             phase = 'loading';
             chosen = target = null;
             attempts = [];
@@ -239,6 +270,7 @@
                     round++;
                     hud();
                     phase = 'guess';
+                    if (mobileLayout.matches) setMapCollapsed(true);
                     status('Sokağı incele. 6 tahmin hakkın var.');
                     return;
                 }
@@ -317,6 +349,7 @@
             } catch (error) { $('error').textContent = error.message; }
             finally { $('start').disabled = false; }
         };
+        setMapCollapsed(mobileLayout.matches);
         $('setup').showModal();
     </script>
 </body>
