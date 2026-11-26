@@ -74,9 +74,7 @@
     <dialog id="setup">
         <h2>GoldenGeoHunter</h2>
         <p>Gerçek sokakları keşfet. Beş tur, her turda altı tahmin. Hedefe 1 km veya daha yakın ol. Toplam 25.000 puan.</p>
-        <label>Google Maps API Key
-            <input id="key" type="password" autocomplete="off" placeholder="AIza...">
-        </label>
+
         <label>Bölge
             <select id="region">
                 <option value="world">Dünya</option>
@@ -160,7 +158,7 @@
             $('round').textContent = `Tur ${round}/5`;
             $('score').textContent = total.toLocaleString('tr-TR') + ' puan';
         }
-        // Google Maps JavaScript API is loaded only after the user enters a key.
+        // Google Maps JavaScript API is loaded when the game starts.
         function loadGoogle(key) {
             if (window.google?.maps?.Map) return Promise.resolve();
             return new Promise((resolve, reject) => {
@@ -303,10 +301,7 @@
         };
         $('settings').onclick = () => $('setup').showModal();
         $('start').onclick = async () => {
-
-            $('key').value = 'AIzaSyCRATOx676bLnij94g_e1IyNzHDwO0r1CQ'
-            
-            const key = $('key').value.trim();
+            const key = 'AIzaSyCRATOx676bLnij94g_e1IyNzHDwO0r1CQ';
             if (!key && !map) { $('error').textContent = 'API anahtarını gir.'; return; }
             $('start').disabled = true;
             $('error').textContent = '';
